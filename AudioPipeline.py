@@ -1,15 +1,17 @@
+import argparse
 import os
 import librosa
 import numpy as np
 import pandas as pd
 import torch
+import soundfile as sf
 from pydub import AudioSegment
 from scipy.signal import resample
 from scipy.io.wavfile import write
 from Model import CustomResNet
 
 
-class AudioPipeline:
+class AudioProcessor:
     def __init__(self, model, segment_duration=30, audio_frame_rate=44100):
         self.model = model
         self.segment_duration = segment_duration
@@ -28,6 +30,13 @@ class AudioPipeline:
         self.audio_array = self.audio_array.reshape((audio.channels, -1))
         self.resample_audio(audio.frame_rate)
 
+    def read_audio(self, audio_path):
+        if not os.path.isfile(audio_path):
+            raise FileNotFoundError(f'File {audio_path} does not exist.')
+        self.audio_name = os.path.basename(audio_path).split('.')[0] + '.wav'
+        self.audio_array, sample_rate = sf.read(audio_path)
+        self.resample_audio(sample_rate)
+
     def resample_audio(self, orig_sr):
         number_of_samples = round(self.audio_array.shape[1] * self.audio_frame_rate / orig_sr)
         self.audio_array = resample(self.audio_array, number_of_samples, axis=1)
@@ -36,9 +45,9 @@ class AudioPipeline:
     def get_spectrogram(audio):
         return librosa.amplitude_to_db(abs(librosa.stft(audio)))
 
-    def load_crops(self):
-        dir_name = self.audio_name.split('.')[0]
-        os.mkdir(dir_name)
+    def load_crops(self, output_dir):
+        dir_name = os.path.join(output_dir, self.audio_name.split('.')[0])
+        os.makedirs(dir_name)
         for i in range(self.cropped_audio.shape[1]):
             crop = []
             for j in range(self.cropped_audio.shape[0]):
@@ -49,8 +58,8 @@ class AudioPipeline:
             file_path = os.path.join(dir_name, file_name)
             write(file_path, self.audio_frame_rate, crop)
 
-    def get_predicts(self):
-        self.load_crops()
+    def get_predicts(self, output_dir):
+        self.load_crops(output_dir)
         names = []
         neg_class = []
         pos_class = []
@@ -69,7 +78,7 @@ class AudioPipeline:
         data['pos_class'] = pos_class
         dir_name = self.audio_name.split('.')[0]
         file_name = self.audio_name.replace('wav', 'csv')
-        data.to_csv(os.path.join(dir_name, file_name), index=False)
+        data.to_csv(os.path.join(output_dir, os.path.join(dir_name, file_name)), index=False)
 
     def crop_audio(self):
         self.cropped_audio = []
@@ -89,9 +98,54 @@ class AudioPipeline:
         self.cropped_audio = np.array(self.cropped_audio)
 
 
+class AudioPipeline:
+    @staticmethod
+    def process_file(filename, output_path, audio_frame_rate, segment_duration, video):
+        if not os.path.isfile(filename):
+            raise FileNotFoundError(f'File {filename} does not exist.')
+        processor = AudioProcessor(model=CustomResNet(2), audio_frame_rate=audio_frame_rate,
+                                   segment_duration=segment_duration)
+        if video:
+            processor.extract_audio(filename)
+        else:
+            processor.read_audio(filename)
+        processor.crop_audio()
+        processor.get_predicts(output_path)
+
+    @staticmethod
+    def process_csv(filename, output_path, audio_frame_rate, segment_duration, video):
+        if not os.path.isfile(filename):
+            raise FileNotFoundError(f'File {filename} does not exist.')
+        paths = pd.read_csv(filename)
+        paths = paths.iloc[:, 0].tolist()
+        for path in paths:
+            AudioPipeline.process_file(path, output_path, audio_frame_rate, segment_duration, video)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--csv_path", default='', type=str)
+    parser.add_argument("--video", default=False, type=bool)
+    parser.add_argument("--file_path", default='', type=str)
+    parser.add_argument("--output_path", default='', type=str)
+    parser.add_argument("--segment_duration", default=3, type=int)
+    parser.add_argument("--audio_frame_rate", default=8000, type=int)
+    args = parser.parse_args()
+
+    segment_duration = args.segment_duration
+    audio_frame_rate = args.audio_frame_rate
+    if not args.output_path:
+        raise ValueError("The --output_path argument is required to specify the directory for saving results.")
+    if not args.csv_path and not args.file_path:
+        raise ValueError("Either --csv_path or --file_path must be provided.")
+    if args.csv_path and args.file_path:
+        raise ValueError(
+            "You cannot specify both --csv_path and --file_path at the same time. Please provide only one.")
+    if args.file_path:
+        AudioPipeline.process_file(args.file_path, args.output_path, audio_frame_rate, segment_duration, args.video)
+    else:
+        AudioPipeline.process_csv(args.csv_path, args.output_path, audio_frame_rate, segment_duration, args.video)
+
+
 if __name__ == '__main__':
-    pip = AudioPipeline(model=CustomResNet(2), audio_frame_rate=8000, segment_duration=3)
-    path = 'resources/vid.MP4'
-    pip.extract_audio(path)
-    pip.crop_audio()
-    pip.get_predicts()
+    main()
