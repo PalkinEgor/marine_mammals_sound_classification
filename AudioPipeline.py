@@ -160,7 +160,7 @@ def main():
     parser.add_argument("--output_path", default = './',
                         help="Place where output csv will be saved", type=str)
     parser.add_argument("--segment_duration", default = 31,
-                        help="Place where output csv will be saved", type=int)
+                        help="Duration of segmentes", type=int)
     parser.add_argument("--audio_frame_rate", default=8000, 
                         help="Audio frame rate", type=int)
     parser.add_argument("--save_all_audio", default = False,
